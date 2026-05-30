@@ -39,6 +39,8 @@ unsigned long lastOk = 0;
 unsigned long lastBack = 0;
 unsigned long lastPause = 0;
 
+String entry;
+
 byte buttonState;
 
 
@@ -78,7 +80,6 @@ void setup() {
   pinMode(BUTTON_BACK, INPUT_PULLUP);
   pinMode(BUTTON_PAUSE, INPUT_PULLUP);
 
-
   initDAC(codec, dac);
 
   initSD();
@@ -103,14 +104,8 @@ void loop() {
     {
       songChange();
       BMP.flush();
-      if (inPlaylist)
-      {
-        f = SD.open(queue[songIndex].substring(0, queue[songIndex].length()-1));
-      }
-      else
-      {
-        f = SD.open(queue[songIndex]);
-      }
+      f = SD.open(queue[songIndex]);
+      f.setTimeout(2000);
       auto p = f.position();
       p = p & ~511; // Ensure on a sector boundary, MP3 will resync appropriately
       f.seek(p);
@@ -135,9 +130,10 @@ void loop() {
         String trackName = getSongName(f);
         String albumName = getAlbum(f);
         String artistName = getArtist(f);
+        unsigned long trackLength = getTrackLengthSeconds(f.size());
         f.close();
         File scrobble = SD.open(".SongHistory.csv", FILE_WRITE);
-        scrobble.println(artistName + "," + trackName + "," + albumName);
+        scrobble.println(artistName + "," + trackName + "," + albumName + "," + String(trackLength));
         scrobble.close();
         songIndex += 1;
       }
@@ -148,272 +144,126 @@ void loop() {
     }
     else
     {
+      fail = false;
       BMP.write(filebuff, len); 
     }
   }
 
-
-
-  if (millis() - lastUp > buttonCooldown)
+  if (checkButton(BUTTON_UP, prevButtonUp, lastUp))
   {
-    buttonState = digitalRead(BUTTON_UP);
-    if (buttonState != prevButtonUp) {
-      lastUp = millis();
-      prevButtonUp = buttonState;
-      if (buttonState == LOW) {
-        if (playingMode)
-        {
-          changeVolume(codec, true);
-        }
-        else
-        {
-          lastScrollUpdate = millis();
-          updatePosition(display, false);
-        }
-      }
-      
+    if (playingMode)
+    {
+      changeVolume(codec, true);
+    }
+    else
+    {
+      lastScrollUpdate = millis();
+      updatePosition(display, false);
     }
   }
 
-  if (millis() - lastDown > buttonCooldown)
+  if (checkButton(BUTTON_DOWN, prevButtonDown, lastDown))
   {
-    buttonState = digitalRead(BUTTON_DOWN);
-    if (buttonState != prevButtonDown) {
-      lastDown = millis();
-      prevButtonDown = buttonState;
-      if (buttonState == LOW) {
-        if (playingMode)
-        {
-          changeVolume(codec, false);
-        }
-        else
-        {
-          lastScrollUpdate = millis();
-          updatePosition(display, true);
-        }
-      }
+    if (playingMode)
+    {
+      changeVolume(codec, false);
+    }
+    else
+    {
+      lastScrollUpdate = millis();
+      updatePosition(display, true);
     }
   }
 
-  if (millis() - lastOk > buttonCooldown)
+  if (checkButton(BUTTON_OK, prevButtonOk, lastOk))
   {
-    buttonState = digitalRead(BUTTON_OK);
-    if (buttonState != prevButtonOk) {
-      lastOk = millis();
-      prevButtonOk = buttonState;
-      if (buttonState == LOW) {
-        if (playingMode)
+    if (playingMode)
+    {
+      f.close();
+      songIndex += 1;
+    }
+    else
+    {
+      lastScrollUpdate = millis();
+      if (updatePath(display, true))
+      {   
+        currentIndex = arrowPlacement+scrollHeight;
+        if (queueMenu)
         {
-          f.close();
-          songIndex += 1;
+          determineQueueing();
         }
-        else
+        else if (inPlaylist && currentIndex == 1 && !removingPlaylist)
         {
-          lastScrollUpdate = millis();
-          if (updatePath(display, true))
+          playlistAddOrRemove(true);
+        }
+        else if (inPlaylist && currentIndex == 2 && !removingPlaylist)
+        {
+          playlistAddOrRemove(false);
+        }
+        else if (removingPlaylist)
+        {
+          File playlist = SD.open(playlistPath, O_WRITE);
+          for (int i = 0; i < pathList.size(); i++)
           {
-            
-            currentIndex = arrowPlacement+scrollHeight;
-            if (queueMenu)
+            if (i != currentIndex)
             {
-              queueMenu = false;
-              getFolders();
-              switch (currentIndex)
-              {
-                case 0:
-                  playingMode = true;
-                  BMP.unpause();
-                  if (inPlaylist)
-                  {
-                    queue.emplace(queue.begin() + songIndex + 1, pathList[prevIndex]);
-                  }
-                  else
-                  {
-                    queue.emplace(queue.begin() + songIndex + 1, currentPath + pathList[prevIndex]);
-                  }
-                  break;
-                case 1:
-                  if (inPlaylist)
-                  {
-                    songIndex = prevIndex - 3;
-                  }
-                  else
-                  {
-                    songIndex = prevIndex - 1;
-                  }
-                  BMP.unpause();
-                  playingSong = true;
-                  playingMode = true;
-                  queue.clear();
-                  if (inPlaylist)
-                  {
-                    for (int i = 3; i < pathList.size(); i++)
-                    {
-                      queue.push_back(pathList[i]);
-                    }
-                  }
-                  else
-                  {
-                    for (int i = 1; i < pathList.size(); i++)
-                    {
-                      queue.push_back(currentPath + pathList[i]);
-                    }
-                  }
-                  f.close();
-                  break;
-              }
-              drawPath(display);
+              playlist.println(pathList[i].substring(0, pathList[i].length() - 1));
             }
-            else if (inPlaylist && currentIndex == 1 && !removingPlaylist)
-            {
-              arrowPlacement = 0;
-              scrollHeight = 0;
-              playlistPath = currentPath;
-              currentPath = "/";
-              addingPlaylist = true;
-              inPlaylist = false;
-              currentDepth = 0;
-              getFolders();
-              drawPath(display);
-            }
-            else if (inPlaylist && currentIndex == 2 && !removingPlaylist)
-            {
-              arrowPlacement = 0;
-              scrollHeight = 0;
-              playlistPath = currentPath;
-              removingPlaylist = true;
-              getFolders();
-              drawPath(display);
-            }
-            else if (removingPlaylist)
-            {
-              File playlist = SD.open(playlistPath, O_WRITE);
-              for (int i = 0; i < pathList.size(); i++)
-              {
-                if (i != currentIndex)
-                {
-                  playlist.println(pathList[i].substring(0, pathList[i].length() - 1));
-                }
-              }
-              playlist.close();
-              removingPlaylist = false;
-              getFolders();
-              drawPath(display);
-            }
-            else if (addingPlaylist)
-            {
-              File playlist = SD.open(playlistPath, FILE_WRITE);
-              playlist.println(currentPath + pathList[currentIndex]);
-              playlist.close();
-              currentPath = playlistPath;
-              currentDepth = 2;
-              inPlaylist = true;
-              addingPlaylist = false;
-              getFolders();
-              drawPath(display);
-            }
-            else if (inPlaylist)
-            {
-              if (playingSong && currentIndex > 2)
-              {
-                prevIndex = currentIndex;
-                queueOption(display);
-              }
-              else
-              {
-                queue.clear();
-                BMP.unpause();
-                playingSong = true;
-                playingMode = true;
-                songIndex = currentIndex - 3;
-                for (int i = 3; i < pathList.size(); i++)
-                {
-                  queue.push_back(pathList[i]);
-                }
-                f.close();
-                if (currentIndex == 0)
-                {
-                  songIndex = 0;
-                  random_shuffle(queue.begin(), queue.end());
-                }
-              }
-            }
-            else
-            {
-              if (playingSong && currentIndex != 0)
-              {
-                prevIndex = currentIndex;
-                queueOption(display);
-              }
-              else
-              {
-                songIndex = currentIndex - 1;
-                BMP.unpause();
-                playingSong = true;
-                playingMode = true;
-                queue.clear();
-                for (int i = 1; i < pathList.size(); i++)
-                {
-                  queue.push_back(currentPath + pathList[i]);
-                }
-                f.close();
-                if (currentIndex == 0)
-                {
-                  songIndex = 0;
-                  random_shuffle(queue.begin(), queue.end());
-                }
-              }
-            }
-          }
-          
-        }
-      }
-    }
-  }
-
-  if (millis() - lastBack > buttonCooldown)
-  {
-    buttonState = digitalRead(BUTTON_BACK);
-    if (buttonState != prevButtonBack) {
-      lastBack = millis();
-      prevButtonBack = buttonState;
-      if (buttonState == LOW) {
-        if (playingMode)
-        {
-          f.close();
-          songIndex -= 1;
-        }
-        else if (!removingPlaylist)
-        {
-          lastScrollUpdate = millis();
-          updatePath(display, false);
-        }
-      }
-    }
-  }
-
-  if (millis() - lastPause > buttonCooldown)
-  {
-    buttonState = digitalRead(BUTTON_PAUSE);
-    if (buttonState != prevButtonPause) {
-      lastPause = millis();
-      prevButtonPause = buttonState;
-      if (buttonState == LOW) {
-        if (BMP.paused() && playingSong)
-        {
-          lastScrollUpdate = millis();
-          BMP.unpause();
-          songChange();
-          playingMode = true;
-        }
-        else if (!BMP.paused() && playingSong)
-        {
-          lastScrollUpdate = millis();
-          BMP.pause();
-          playingMode = false;
+           }
+          playlist.close();
+          removingPlaylist = false;
+          getFolders();
           drawPath(display);
         }
+        else if (addingPlaylist)
+        {
+          File playlist = SD.open(playlistPath, FILE_WRITE);
+          playlist.println(currentPath + pathList[currentIndex]);
+          playlist.close();
+          currentPath = playlistPath;
+          currentDepth = 2;
+          inPlaylist = true;
+          addingPlaylist = false;
+          getFolders();
+          drawPath(display);
+        }
+        else
+        {
+          queueCheck();
+        }
       }
+    }
+  }
+
+  if (checkButton(BUTTON_BACK, prevButtonBack, lastBack))
+  {
+    if (playingMode)
+    {
+      f.close();
+      songIndex -= 1;
+    }
+    else if (!removingPlaylist)
+    {
+      lastScrollUpdate = millis();
+      updatePath(display, false);
+    }
+  }
+
+  if (checkButton(BUTTON_PAUSE, prevButtonPause, lastPause))
+  {
+    if (BMP.paused() && playingSong)
+    {
+      lastScrollUpdate = millis();
+      BMP.unpause();
+      songChange();
+      playingMode = true;
+    }
+    else if (!BMP.paused() && playingSong)
+    {
+      lastScrollUpdate = millis();
+      BMP.pause();
+      playingMode = false;
+      drawPath(display);
     }
   }
 
@@ -446,13 +296,131 @@ void loop() {
       displaySong(display, f);
     }
   }
-  
+}
 
-  // Could do things like draw a UI on a LCD, check buttons, etc. here on each loop
-  // Just be sure to feed the MP3 raw data at a BPS matching the recording mode
-  // (i.e. a 128Kb MP3 only needs 128Kb (16K byte) of reads every second).  Don't disable
-  // IRQs for long, either, as the audio DMA and calculations re driven off of them.
-  //
-  // If you don't send data fast enough (underflow) or you stop sending data completely,
-  // the audio will silence and continue when more data is available.
+void playSong(int index, bool shuffle = true)
+{
+  if (inPlaylist)
+  {
+    songIndex = index - 3;
+  }
+  else
+  {
+    songIndex = index - 1;
+  }
+  BMP.unpause();
+  playingSong = true;
+  playingMode = true;
+  queue.clear();
+  int startIndex = 1;
+  if (inPlaylist)
+  {
+    startIndex = 3;
+  }
+  for (int i = startIndex; i < pathList.size(); i++)
+  {
+    getEntry(i);
+    queue.push_back(entry);
+  }
+  f.close();
+  if (index == 0 && shuffle)
+  {
+    songIndex = 0;
+    random_shuffle(queue.begin(), queue.end());
+  }
+}
+
+bool checkButton(pin_size_t button, byte& prevButtonState, unsigned long& lastUse)
+{
+  if (millis() - lastUse > buttonCooldown)
+  {
+    buttonState = digitalRead(button);
+    if (buttonState != prevButtonState) {
+      lastUse = millis();
+      prevButtonState = buttonState;
+      if (buttonState == LOW) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void determineQueueing()
+{
+  queueMenu = false;
+  getFolders();
+  switch (currentIndex)
+  {
+    case 0:
+    {
+      auto placementIndex = queue.begin() + songIndex + 1;
+      getEntry(prevIndex);
+      queue.emplace(placementIndex, entry);
+      break;
+    }
+    case 1:
+      playSong(prevIndex, false);
+      break;
+  }
+  arrowPlacement = 0;
+  scrollHeight = 0;
+  drawPath(display);
+}
+
+String cleanEntry(String entry)
+{
+  return entry.substring(0, entry.length()-1);
+}
+
+void getEntry(int index)
+{
+  if (inPlaylist)
+  {
+    entry = cleanEntry(pathList[index]);
+  }
+  else
+  {
+    entry = currentPath + pathList[index];
+  }
+}
+
+void queueCheck()
+{
+  int checkIndex = 0;
+  if (inPlaylist)
+  {
+    checkIndex = 2;
+  }
+  if (playingSong && currentIndex > checkIndex)
+  {
+    prevIndex = currentIndex;
+    queueOption(display);
+  }
+  else
+  {
+    playSong(currentIndex);
+  }
+}
+
+void playlistAddOrRemove(bool add)
+{
+  arrowPlacement = 0;
+  scrollHeight = 0;
+  playlistPath = currentPath;
+
+  if (add)
+  {
+    currentPath = "/";
+    addingPlaylist = true;
+    inPlaylist = false;
+    currentDepth = 0;
+  }
+  else
+  {
+    removingPlaylist = true;
+  }
+  getFolders();
+  drawPath(display);
+
 }

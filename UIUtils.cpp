@@ -9,7 +9,6 @@
 #include "SDUtils.h"
 #include "generalUtils.h"
 
-
 std::vector<String> pathList;
 std::vector<int> scrollables;
 String playlistPath;
@@ -292,9 +291,6 @@ void getFolders()
       {
         continue;
       }
-
-      
-
       if (name.length() > 18)
       {
         scrollables.push_back((counter));
